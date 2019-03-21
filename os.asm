@@ -66,7 +66,21 @@
 .DATA
 .ADDR xA000
 OS_GLOBALS_MEM	.BLKW x1000
-;;;  LFSR value used by lfsr code
+
+;;; Labels to be used in TRAP_DRAW_RECT
+
+X_COORD_IN_OS_GLOBAL_MEM .UCONST xA000
+Y_COORD_IN_OS_GLOBAL_MEM .UCONST xA001
+LENGTH_IN_OS_GLOBAL_MEM .UCONST xA002
+WIDTH_IN_OS_GLOBAL_MEM .UCONST xA003
+COLOR_IN_OS_GLOBAL_MEM .UCONST xA004
+OS_VIDEO_MEM_IN_OS_GLOBAL_MEM .UCONST xA005
+OS_NUM_OF_ROWS_IN_OS_GLOBAL_MEM .UCONST xA006
+OS_NUM_OF_COLS_IN_OS_GLOBAL_MEM .UCONST xA007
+R7_IN_OS_GLOBAL_MEM .UCONST xA008
+
+
+;;; LFSR value used by lfsr code
 LFSR .FILL 0x0001
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -156,13 +170,13 @@ TRAP_GETS
   CONST R3, xFF
   HICONST R3, x7F
   CMP R0, R3           ; sets  NZP (R0 - R3)
-  BRp RETURN           ; tests NZP (was R0 - x7FFF positive?, if yes, go to RTI); 
+  BRp RETURN_TO_CALLER_TRAP_GETS           ; tests NZP (was R0 - x7FFF positive?, if yes, go to RTI); 
                        ; if R0 was not a valid address in User Data Memory then return to caller
   
   CONST R3, x00
   HICONST R3, x20
   CMP R0, R3           ; sets  NZP (R0 - R3)
-  BRnz RETURN          ; tests NZP (was R0 - x2000 negative or zero?, if yes, go to RTI); 
+  BRnz RETURN_TO_CALLER_TRAP_GETS          ; tests NZP (was R0 - x2000 negative or zero?, if yes, go to RTI); 
                        ; if R0 was not a valid address in User Data Memory then return to caller
   
   ; reaching here, means R0 is a valid data memory addr.
@@ -182,7 +196,7 @@ TRAP_GETS
   STR R5, R0, #0       ; put NULL into the data memory addr stored in R0 
                            ; to represent the end of the str
  
-  RETURN
+  RETURN_TO_CALLER_TRAP_GETS
   RTI
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;   TRAP_PUTS   ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -196,21 +210,21 @@ TRAP_PUTS
   CONST R3, xFF
   HICONST R3, x7F
   CMP R0, R3           ; sets  NZP (R0 - R3)
-  BRp RETURN_TO_CALLER    ; tests NZP (was R0 - x7FFF positive?, if yes, go to RTI); 
-                              ; if R0 was not a valid address in User Data Memory then return to caller
+  BRp RETURN_TO_CALLER_TRAP_PUTS    ; tests NZP (was R0 - x7FFF positive?, if yes, go to RTI); 
+                                        ; if R0 was not a valid address in User Data Memory then return to caller
   
   CONST R3, x00
   HICONST R3, x20
   CMP R0, R3           ; sets  NZP (R0 - R3)
-  BRn RETURN_TO_CALLER   ; tests NZP (was R0 - x2000 negative?, if yes, go to RTI); 
-                             ; if R0 was not a valid address in User Data Memory then return to caller
+  BRn RETURN_TO_CALLER_TRAP_PUTS   ; tests NZP (was R0 - x2000 negative?, if yes, go to RTI); 
+                                       ; if R0 was not a valid address in User Data Memory then return to caller
   
   LDR R2, R0, #0       ; R2 = R0; load the ASCII character from the address held in R0
   
   WHILE_LOOP 
       CMPI R2, x00       ; sets  NZP (R2 - x00); 
-      BRz RETURN_TO_CALLER  ; tests NZP (was R2 - x00 zero?, if yes, go to RTI); 
-                                ; check if ASCII character is NULL, if yes then return to caller 
+      BRz RETURN_TO_CALLER_TRAP_PUTS  ; tests NZP (was R2 - x00 zero?, if yes, go to RTI); 
+                                          ; check if ASCII character is NULL, if yes then return to caller 
  
       LC R1, OS_ADSR_ADDR 	; R1 = address of display status reg
       LDR R1, R1, #0    	; R1 = value of display status reg
@@ -225,7 +239,7 @@ TRAP_PUTS
       LDR R2, R0, #0        ; R1 = R0; load the ASCII character from the address held in R0   
       JMP WHILE_LOOP
 
-  RETURN_TO_CALLER
+  RETURN_TO_CALLER_TRAP_PUTS
   RTI
 
 
@@ -258,10 +272,31 @@ COUNT
 .CODE
 TRAP_GETC_TIMER
 
-  ;;
-  ;; TO DO: complete this trap
-  ;;
+  LC R1, OS_TIR_ADDR 	; R1 = address of timer interval reg
+  STR R0, R1, #0    	; Store R0 in timer interval register
 
+  GETC_TIMER_COUNT
+      LC R1, OS_TSR_ADDR  	; Save timer status register in R1
+      LDR R1, R1, #0    	; Load the contents of TSR in R1     
+      BRzp CHECK_KEY_STAT_REG    	    ; If R1[15]=1, timer has gone off!
+
+  ; reaching this line means we've finished counting R0
+  
+  CONST R0, #0             ; R0 = 0 because user didn't type in char before timer ended
+  BRz RETURN_TO_CALLER_GETC_TIMER     ; if R0 = 0, go to RETURN_TO_CALLER_GETC_TIMER
+
+  CHECK_KEY_STAT_REG
+      LC R0, OS_KBSR_ADDR  ; R0 = address of keyboard status reg
+      LDR R0, R0, #0       ; R0 = value of keyboard status reg
+      BRzp GETC_TIMER_COUNT           ; if R0[15]=1, data is waiting!
+                                        ; else, loop and check again...
+
+    ; reaching here, means data is waiting in keyboard data reg
+
+      LC R0, OS_KBDR_ADDR  ; R0 = address of keyboard data reg
+      LDR R0, R0, #0       ; R0 = value of keyboard data reg
+
+  RETURN_TO_CALLER_GETC_TIMER
   RTI                  ; PC = R7 ; PSR[15]=0
 
 
@@ -323,17 +358,133 @@ END_PIXEL
   
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;   TRAP_DRAW_RECT   ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; Function: EDIT ME!
-;;; Inputs    EDIT ME!
-;;; Outputs   EDIT ME!
+;;; Function: Draw a rectangle on the video display 
+;;; Inputs    - R0 = “x coordinate” of upper-left corner of the rectangle.
+;;;           - R1 = “y coordinate” of upper-left corner of the rectangle.
+;;;           - R2 = length of the rectangle (in number of pixels).
+;;;           - R3 = width of the side of the rectangle (in number of pixels).
+;;;           - R4 = the color of the rectangle
+;;; Outputs   A rectangle on the video display; 
+;;;           If full length/ width arguments are invalid then no rectangle is drawn
 
 .CODE
 TRAP_DRAW_RECT
 
-  ;;
-  ;; TO DO: complete this trap
-  ;;
+  ;; Check to see if the starting x-coordinate + length - 1 (full length of rect) is valid. 
+  ;; Check to see if the starting y-coordinate + width - 1 (full width of rect) is valid. 
 
+  ADD R5, R2, R0           ; R5 = R2 + R0; length = length + x-coordinate 
+  ADD R5, R5, #-1          ; R5 = R5 - 1; full length = length + x-coordinate - 1 
+  CMPIU R5, #0    	       ; Checks if full length from input is > 0
+  BRnz END_PIXEL_FOR_DRAW_RECT
+  CMPIU R5, #127    	   ; Checks if full length from input is =< 127
+  BRp END_PIXEL_FOR_DRAW_RECT
+  
+  ADD R5, R3, R1           ; R5 = R3 + R0; width = width + y-coordinate 
+  ADD R5, R5, #-1          ; R5 = R5 - 1; full width = width + y-coordinate - 1 
+  CMPIU R5, #0    	       ; Checks if full width from input is > 0
+  BRnz END_PIXEL_FOR_DRAW_RECT
+  CMPIU R5, #123    	   ; Checks if full width from input is =< 123
+  BRp END_PIXEL_FOR_DRAW_RECT
+
+  ;; Store inputs (R0-R4) inside of the os global mem, starting at addr xA000.
+  ;; Store OS_VIDEO_MEM, OS_VIDEO_NUM_ROWS, and OS_VIDEO_NUM_COLS inside of the os global mem.
+  ;; Create a label for each addr in os global mem to be able to use later w/o iterating. 
+  
+  LEA R5, OS_GLOBALS_MEM   ; R5 = xA000; start address of os global mem
+  STR R0, R5, #0           ; R5 = R0; store R0 (x-coordinate) into the os global mem addr stored in R5
+  
+  ADD R5, R5, #1           ; R5 = R5 + 1; increase the os global mem addr by 1 
+  STR R1, R5, #0           ; R5 = R1; store R1 (y-coordinate) into the os global mem addr stored in R5 
+
+  ADD R5, R5, #1           ; R5 = R5 + 1; increase the os global mem addr by 1 
+  STR R2, R5, #0           ; R5 = R2; store R2 (length) into the os global mem addr stored in R5 
+
+  ADD R5, R5, #1           ; R5 = R5 + 1; increase the os global mem addr by 1 
+  STR R3, R5, #0           ; R5 = R3; store R3 (width) into the os global mem addr stored in R5 
+
+  ADD R5, R5, #1           ; R5 = R5 + 1; increase the os global mem addr by 1 
+  STR R4, R5, #0           ; R5 = R4; store R4 (color) into the os global mem addr stored in R5 
+
+  ADD R5, R5, #1           ; R5 = R5 + 1; increase the os global mem addr by 1 
+  LEA R0, OS_VIDEO_MEM     ; R0 =start address of video memory
+  STR R0, R5, #0           ; R5 = R0; store R0 (os video mem) into the os global mem addr stored in R5 
+
+  ADD R5, R5, #1           ; R5 = R5 + 1; increase the os global mem addr by 1 
+  LC R0, OS_VIDEO_NUM_ROWS     ; R0 =number of rows (0-123)
+  STR R0, R5, #0           ; R5 = R0; store R0 (num rows) into the os global mem addr stored in R5 
+
+  ADD R5, R5, #1           ; R5 = R5 + 1; increase the os global mem addr by 1 
+  LC R0, OS_VIDEO_NUM_COLS     ; R0 = number of columns (0-127)
+  STR R0, R5, #0           ; R5 = R0; store R0 (num cols) into the os global mem addr stored in R5 
+
+  ADD R5, R5, #1           ; R5 = R5 + 1; increase the os global mem addr by 1 
+  STR R7, R5, #0           ; R7 = R0; store R7 (PC value) into the os global mem addr stored in R5 
+
+  ;; Draw the rectangle by drawing each individual pixel, starting with the starting coordinate.
+  ;; It is row major so first identify the row (y-coordinate) and then the column (x-coordinate). 
+  
+  ; Load arguments from os global mem     
+  LC R0, Y_COORD_IN_OS_GLOBAL_MEM           ; R0 = y-coord in os global mem
+  LDR R0, R0, #0            ; R0 = y-coord 
+  LC R1, OS_NUM_OF_COLS_IN_OS_GLOBAL_MEM    ; R1 = num of cols in os global mem
+  LDR R1, R1, #0            ; R1 = num of cols 
+  LC R2, X_COORD_IN_OS_GLOBAL_MEM           ; R2 = x-coord in os global mem
+  LDR R2, R2, #0            ; R1 = x-coord  
+  LC R3, OS_VIDEO_MEM_IN_OS_GLOBAL_MEM      ; R3 = start of video mem in os global mem
+  LDR R3, R3, #0            ; R3 = start of video mem
+  LC R5, COLOR_IN_OS_GLOBAL_MEM      ; R5 = color in os global mem
+  LDR R5, R5, #0            ; R5 = color
+  
+  ; Load the length from the os global mem
+  LC R6, LENGTH_IN_OS_GLOBAL_MEM     ; R6 = length in os global mem
+  LDR R6, R6, #0            ; R6 = length
+  ADD R6, R6, R2            ; R6 = R6 + R2; length = length + x-coord
+  ADD R6, R6, #-1           ; R6 = R6 - 1; full length = length + x-coord - 1
+  
+  ; Load the width from the os global mem 
+  LC R7, WIDTH_IN_OS_GLOBAL_MEM       ; R7 = width in os global mem
+  LDR R7, R7, #0            ; R7 = width
+  ADD R7, R7, R0            ; R7 = R7 + R0; width = width + y-coord
+  ADD R7, R7, #-1           ; R7 = R7 - 1; full width = width + y-coord - 1
+      
+  ; Fill in the pixel at the (x,y) coordinate 
+  
+  LOOP_TO_FILL_OUT_LENGTH
+           
+      ; Draw pixel
+      MUL R4, R0, R1      	    ; R4= (row * NUM_COLS)
+      ADD R4, R4, R2      	    ; R4= (row * NUM_COLS) + col
+      ADD R4, R4, R3      	    ; Add the offset to the start of video memory
+      STR R5, R4, #0      	    ; Fill in the pixel with color from user (R2)
+
+      ;; Increase the x-coord by 1. 
+      ;; If x-coord > full length, then row is filled out, so need to go to next row
+      ADD R2, R2, #1            ; R2 = R2 + 1; add 1 to the x-coord 
+      CMPU R6, R2               ; Check if R6 >= R2 
+                                    ;(if x-coord is not greater than full length, then not done filling out row) 
+      BRzp LOOP_TO_FILL_OUT_LENGTH    
+
+  ;; If reach this point then the length has been filled out: one row is completed
+  ;; Now, add 1 to the y-coord to increase the width: go to the next row
+  
+  LOOP_TO_INCREASE_WIDTH 
+   
+      ;; Increase the y-coord by 1. 
+      ;; If y-coord > full width, then we have reached the full width so can return rectangle 
+      
+      ; Reset the x-coord to its original value
+      LC R2, X_COORD_IN_OS_GLOBAL_MEM           ; R2 = x-coord in os global mem
+      LDR R2, R2, #0            ; R1 = x-coord  
+  
+      ADD R0, R0, #1            ; R1 = R1 + 1; add 1 to the y-coord
+      CMPU R7, R0               ; Check if R7 >= R0 
+                                    ;(if y-coord is not greater than full width, then not done filling out rectangle) 
+      BRzp LOOP_TO_FILL_OUT_LENGTH  
+ 
+  END_PIXEL_FOR_DRAW_RECT
+  LC R7, R7_IN_OS_GLOBAL_MEM    ; R7 = PC value stored in os global mem
+  LDR R7, R7, #0                ; R7 = PC value
   RTI
 
 
